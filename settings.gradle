@@ -1,0 +1,2 @@
+rootProject.name = "BatteryMonitorApp"
+include(":app")
