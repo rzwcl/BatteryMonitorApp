@@ -6,72 +6,82 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.*
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import androidx.compose.ui.unit.sp
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
+    private val updateInterval = 1000L // 毫秒
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContent {
-            BatteryMonitorApp()
+            BatteryMonitorUI()
         }
     }
 
     @Composable
-    fun BatteryMonitorApp() {
-        var voltage by remember { mutableStateOf(0L) }
-        var current by remember { mutableStateOf(0L) }
-        var isDualBattery by remember { mutableStateOf(true) }
-        var showRawInfo by remember { mutableStateOf(false) }
+    fun BatteryMonitorUI() {
+        var voltage by remember { mutableStateOf(0.0) }
+        var current by remember { mutableStateOf(0.0) }
+        var power by remember { mutableStateOf(0.0) }
+        var status by remember { mutableStateOf("未知") }
 
-        // 循环刷新数据
+        var dualBattery by remember { mutableStateOf(true) }      // 双电芯开关
+        var showRaw by remember { mutableStateOf(false) }         // 显示原始信息开关
+
         LaunchedEffect(Unit) {
             while (true) {
-                voltage = readSysFile("/sys/class/power_supply/battery/voltage_now") ?: 0L
-                current = readSysFile("/sys/class/power_supply/battery/current_now") ?: 0L
-                delay(1000)
+                val rawV = readFile("/sys/class/power_supply/battery/voltage_now")
+                val rawC = readFile("/sys/class/power_supply/battery/current_now")
+
+                val v = rawV / 1_000_000 * if (dualBattery) 2 else 1
+                val c = -rawC / 1_000_000
+                val p = v * c
+
+                voltage = if (showRaw) rawV.toDouble() else v
+                current = if (showRaw) -rawC.toDouble() else c
+                power = if (showRaw) (rawV * -rawC).toDouble() else p
+
+                status = if (c < 0 || c > 5) "电流异常" else "校准正常"
+
+                kotlinx.coroutines.delay(updateInterval)
             }
         }
 
-        val vTotal = if (isDualBattery) voltage * 2 else voltage
-        val iTotal = -current
-        val power = vTotal * iTotal / 1_000_000_000.0
+        Column(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("电压: %.3f ${if (showRaw) "uV" else "V"}".format(voltage), fontSize = 24.sp)
+            Text("电流: %.3f ${if (showRaw) "uA" else "A"}".format(current), fontSize = 24.sp)
+            Text("功率: %.3f ${if (showRaw) "uW" else "W"}".format(power), fontSize = 24.sp)
+            Text("状态: $status", fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
 
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("电压: %.3f V".format(vTotal / 1_000_000.0))
-            Text("电流: %.3f A".format(iTotal / 1_000_000.0))
-            Text("功率: %.3f W".format(power))
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text("双电芯")
-                Switch(checked = isDualBattery, onCheckedChange = { isDualBattery = it })
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("双电芯模式", fontSize = 16.sp)
+                Switch(checked = dualBattery, onCheckedChange = { dualBattery = it })
             }
 
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text("显示原始信息")
-                Switch(checked = showRawInfo, onCheckedChange = { showRawInfo = it })
-            }
-
-            if (showRawInfo) {
-                Text("原始电压: $voltage µV")
-                Text("原始电流: $current µA")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("显示原始信息", fontSize = 16.sp)
+                Switch(checked = showRaw, onCheckedChange = { showRaw = it })
             }
         }
     }
 
-    // 读取系统文件，使用 Root 权限
-    suspend fun readSysFile(path: String): Long? = withContext(Dispatchers.IO) {
-        try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat $path"))
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            val value = reader.readLine()?.trim()?.toLongOrNull()
-            process.waitFor()
-            value
-        } catch (e: Exception) { null }
+    private fun readFile(path: String): Long {
+        return try {
+            File(path).readText().trim().toLong()
+        } catch (e: Exception) {
+            0L
+        }
     }
 }
